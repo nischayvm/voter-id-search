@@ -62,48 +62,49 @@ if selected_file_path:
 
     # 4. Search Logic
     if search_term:
-        results = pd.DataFrame()
-        
-        # Prepare search text: Normalize string logic
-        # If searching "All Columns", we assume a concatenated string representation for each row
-        if search_column == "All Columns":
-            # For speed, we create a single "text_content" series to search against
-            # We cache this operation inside a transient check or just compute it
-            search_series = df.astype(str).agg(' '.join, axis=1)
-        else:
-            search_series = df[search_column].astype(str)
+        with st.spinner('Searching 500,000+ records...'):
+            results = pd.DataFrame()
+            
+            # Prepare search text: Normalize string logic
+            # If searching "All Columns", we assume a concatenated string representation for each row
+            if search_column == "All Columns":
+                # For speed, we create a single "text_content" series to search against
+                # We cache this operation inside a transient check or just compute it
+                search_series = df.astype(str).agg(' '.join, axis=1)
+            else:
+                search_series = df[search_column].astype(str)
 
-        # A. Smart Permutation Search (Fast, exact words)
-        if not use_fuzzy:
-            keywords = search_term.split()
-            # Start with all true
-            mask = pd.Series([True] * len(df))
+            # A. Smart Permutation Search (Fast, exact words)
+            if not use_fuzzy:
+                keywords = search_term.split()
+                # Start with all true
+                mask = pd.Series([True] * len(df))
+                
+                for keyword in keywords:
+                    # Accumulate filters: must contain keyword1 AND keyword2 ...
+                    mask = mask & search_series.str.contains(keyword, na=False, case=False, regex=False)
+                
+                results = df[mask]
             
-            for keyword in keywords:
-                # Accumulate filters: must contain keyword1 AND keyword2 ...
-                mask = mask & search_series.str.contains(keyword, na=False, case=False, regex=False)
-            
-            results = df[mask]
-        
-        # B. Fuzzy Search (Slower, handles typos)
-        else:
-            # RapidFuzz extraction
-            # This can be slow on 500k rows, so we proceed carefully.
-            # We use process.extract to find matches with a score cutoff.
-            # However, extract works on a list/series.
-            
-            # Limited to top 100 matches to prevent UI freeze if everything matches slightly
-            matches = process.extract(
-                search_term, 
-                search_series, 
-                scorer=fuzz.token_sort_ratio, 
-                limit=100,
-                score_cutoff=70
-            ) 
-            # matches is a list of tuples: (match_string, score, index)
-            if matches:
-                 indices = [match[2] for match in matches]
-                 results = df.iloc[indices]
+            # B. Fuzzy Search (Slower, handles typos)
+            else:
+                # RapidFuzz extraction
+                # This can be slow on 500k rows, so we proceed carefully.
+                # We use process.extract to find matches with a score cutoff.
+                # However, extract works on a list/series.
+                
+                # Limited to top 100 matches to prevent UI freeze if everything matches slightly
+                matches = process.extract(
+                    search_term, 
+                    search_series, 
+                    scorer=fuzz.token_sort_ratio, 
+                    limit=100,
+                    score_cutoff=70
+                ) 
+                # matches is a list of tuples: (match_string, score, index)
+                if matches:
+                     indices = [match[2] for match in matches]
+                     results = df.iloc[indices]
 
         # 5. Display Results
         if not results.empty:
