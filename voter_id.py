@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import os
+import requests
+import re
+import itertools
 from rapidfuzz import process, fuzz
 
 # Page configuration
@@ -44,6 +47,50 @@ if selected_file_path:
             return pd.read_csv(file_path, encoding='latin1', dtype=str)
 
     df = load_data(selected_file_path)
+
+    # 2b. Transliteration Function
+    @st.cache_data(show_spinner=False)
+    def transliterate_text(text, lang='kn', max_results=5):
+        """
+        Transliterates English text to Kannada using Google Input Tools API.
+        Returns a list of top unique transliterations (up to max_results).
+        """
+        url = "https://inputtools.google.com/request"
+        params = {
+            'text': text,
+            'itc': f'{lang}-t-i0-und',
+            'num': max_results, # Candidates per word
+            'cp': 0,
+            'cs': 1,
+            'ie': 'utf-8',
+            'oe': 'utf-8',
+            'app': 'demopage'
+        }
+        try:
+            response = requests.get(url, params=params, timeout=5)
+            if response.status_code == 200:
+                result = response.json()
+                if result[0] == 'SUCCESS':
+                    # result[1] involves a list of [original, [suggestions], ...] for each token
+                    token_suggestions = []
+                    for item in result[1]:
+                        # item[1] is the list of suggestions for this token
+                        token_suggestions.append(item[1])
+                    
+                    # Generate combinations (e.g. "Ravi" + " " + "Kumar")
+                    # We limit the cartesian product to avoid explosion
+                    combinations = list(itertools.product(*token_suggestions))
+                    
+                    # Join tokens to form full phrases
+                    transliterated_phrases = ["".join(combo) for combo in combinations]
+                    
+                    # Deduplicate and return top N
+                    unique_phrases = list(dict.fromkeys(transliterated_phrases))
+                    return unique_phrases[:max_results]
+        except Exception as e:
+            # Silently fail or log? For UI, maybe just return empty or original
+            pass
+        return [text]
     
     # 3. Search Interface
     col1, col2 = st.columns([1, 2])
@@ -76,18 +123,46 @@ if selected_file_path:
 
             # A. Smart Permutation Search (Fast, exact words)
             if not use_fuzzy:
-                keywords = search_term.split()
-                # Start with all true
-                mask = pd.Series([True] * len(df))
+                # Check for English input
+                is_english = bool(re.search(r'[a-zA-Z]', search_term))
+                search_variations = [search_term]
+
+                if is_english:
+                    with st.spinner('Transliterating...'):
+                        transliterated = transliterate_text(search_term)
+                        # If we got actual Kannada results (different from input), use them
+                        if transliterated and transliterated != [search_term]:
+                            search_variations = transliterated
+                            st.info(f"🔎 Searching for Kannada variations: {', '.join(search_variations)}")
                 
-                for keyword in keywords:
-                    # Accumulate filters: must contain keyword1 AND keyword2 ...
-                    mask = mask & search_series.str.contains(keyword, na=False, case=False, regex=False)
+                # Search for ANY of the variations
+                # We combine the masks for each variation with OR
+                final_mask = pd.Series([False] * len(df))
                 
-                results = df[mask]
+                for term in search_variations:
+                    keywords = term.split()
+                    # term_mask assumes ALL keywords in this specific term must be present
+                    term_mask = pd.Series([True] * len(df))
+                    for keyword in keywords:
+                        term_mask = term_mask & search_series.str.contains(keyword, na=False, case=False, regex=False)
+                    
+                    final_mask = final_mask | term_mask
+                
+                results = df[final_mask]
             
             # B. Fuzzy Search (Slower, handles typos)
             else:
+                # Check for English input
+                is_english = bool(re.search(r'[a-zA-Z]', search_term))
+                target_term = search_term
+                
+                if is_english:
+                    with st.spinner('Transliterating for fuzzy search...'):
+                         transliterated = transliterate_text(search_term, max_results=1)
+                         if transliterated:
+                             target_term = transliterated[0]
+                             st.info(f"Using primary transliteration for fuzzy search: {target_term}")
+
                 # RapidFuzz extraction
                 # This can be slow on 500k rows, so we proceed carefully.
                 # We use process.extract to find matches with a score cutoff.
@@ -95,7 +170,7 @@ if selected_file_path:
                 
                 # Limited to top 100 matches to prevent UI freeze if everything matches slightly
                 matches = process.extract(
-                    search_term, 
+                    target_term, 
                     search_series, 
                     scorer=fuzz.token_sort_ratio, 
                     limit=100,
