@@ -22,20 +22,22 @@ if not os.path.exists(data_folder):
 
 files = [f for f in os.listdir(data_folder) if f.endswith(('.csv', '.xlsx'))]
 
-selected_file_path = None
 with st.sidebar:
-    st.header("Select Data File")
+    st.header("Select Data Files")
     if files:
-        selected_file = st.selectbox("Choose a voter list", files)
-        selected_file_path = os.path.join(data_folder, selected_file)
+        # Default to all files if less than 3, otherwise just the first one to avoid huge load interactions? 
+        # Actually user wants to search AC_177 "as well", so likely wants all.
+        # Let's default to all files for convenience as per user intent.
+        selected_files = st.multiselect("Choose voter lists", files, default=files)
+        
     else:
         st.error(f"No CSV/Excel files found in '{data_folder}' folder.")
         st.info("Please put any '2002 Voter list....csv' files inside the 'data' folder.")
 
-if selected_file_path:
+if files and selected_files:
     # 2. Optimized Data Loading
-    @st.cache_data(show_spinner="Indexing half a million rows...", ttl="2h")
-    def load_data(file_path):
+    @st.cache_data(show_spinner="Loading data...", ttl="2h")
+    def load_single_file(file_path):
         try:
             if file_path.endswith('.csv'):
                 # dtype=str prevents #NAME? errors by treating all data as text
@@ -46,7 +48,23 @@ if selected_file_path:
             # Fallback for older file encodings
             return pd.read_csv(file_path, encoding='latin1', dtype=str)
 
-    df = load_data(selected_file_path)
+    # Load all selected files and concatenate
+    dfs = []
+    # Create a progress bar if loading multiple files might take time
+    progress_text = "Loading selected files..."
+    my_bar = st.progress(0, text=progress_text)
+    
+    for i, file_name in enumerate(selected_files):
+        full_path = os.path.join(data_folder, file_name)
+        dfs.append(load_single_file(full_path))
+        my_bar.progress((i + 1) / len(selected_files), text=f"Loaded {file_name}")
+    
+    my_bar.empty()
+    
+    if dfs:
+        df = pd.concat(dfs, ignore_index=True)
+    else:
+        df = pd.DataFrame()
 
     # 2b. Transliteration Function
     @st.cache_data(show_spinner=False)
@@ -204,4 +222,4 @@ if selected_file_path:
         st.dataframe(df.head(50), use_container_width=True)
 
 else:
-    st.warning("No data file selected.")
+    st.warning("No data file selected. Please choose at least one file from the sidebar.")
