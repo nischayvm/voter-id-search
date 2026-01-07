@@ -150,8 +150,11 @@ if files and selected_files:
                         transliterated = transliterate_text(search_term)
                         # If we got actual Kannada results (different from input), use them
                         if transliterated and transliterated != [search_term]:
-                            search_variations = transliterated
-                            st.info(f"🔎 Searching for Kannada variations: {', '.join(search_variations)}")
+                            # Extend the list instead of replacing it to search BOTH English and Kannada
+                            search_variations.extend(transliterated)
+                            # Remove duplicates while preserving order
+                            search_variations = list(dict.fromkeys(search_variations))
+                            st.info(f"🔎 Searching for: {', '.join(search_variations)}")
                 
                 # Search for ANY of the variations
                 # We combine the masks for each variation with OR
